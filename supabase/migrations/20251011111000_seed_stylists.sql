@@ -33,6 +33,21 @@ JOIN seed_data sd USING (rn)
 ON CONFLICT (user_id) DO NOTHING;
 
 -- Insert stylists rows
+WITH selected_users AS (
+  SELECT id AS user_id, row_number() OVER (ORDER BY created_at) AS rn
+  FROM auth.users
+  WHERE id NOT IN (SELECT profile_id FROM public.stylists)
+  ORDER BY created_at
+  LIMIT 3
+),
+seed_data AS (
+  SELECT * FROM (
+    VALUES
+      (1, 'Ava Cole', 'Balayage specialist with a focus on low-maintenance color.', ARRAY['color','balayage','toning']),
+      (2, 'Marco Nguyen', 'Precision cuts and fades; loves modern, clean looks.', ARRAY['cut','fade','styling']),
+      (3, 'Lina Park', 'Curly-hair expert; healthy curls, diffusing and treatments.', ARRAY['cut','curly','treatment'])
+  ) AS t(rn, display_name, bio, specialties)
+)
 INSERT INTO public.stylists (profile_id, display_name, bio, specialties, is_active)
 SELECT su.user_id, sd.display_name, sd.bio, sd.specialties, true
 FROM selected_users su
