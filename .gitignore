@@ -1,0 +1,5 @@
+SalonPRD/
+.DS_Store
+.env*
+.vercel
+supabase/.temp/
