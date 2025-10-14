@@ -3,8 +3,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { getSupabaseClient, isSupabaseEnvReady } from "@/lib/supabase-client";
-import { createAppointment } from "@/services/appointments";
-import { loadStylists, type Stylist } from "@/services/stylists";
+import { createAppointment, isStylistRangeAvailable, loadStylists, loadStylistBusySlots } from "@/services/appointments";
 import { Calendar } from "@/components/ui/calendar";
 
 export type AppointmentData = {
@@ -49,40 +48,17 @@ export default function BookingForm(props: BookingFormProps): React.JSX.Element 
     return `$${dollars}.${fractional}`;
   };
 
-  // Local list of available stylists (system-held data)
-  // Local list of available stylists (system-held data)
-  const [stylists, setStylists] = useState<Stylist[]>([]);
-  const [stylistsError, setStylistsError] = useState<string | null>(null);
-  const [stylistsLoading, setStylistsLoading] = useState<boolean>(false);
-  useEffect(() => {
-    let active = true;
-    const run = async (): Promise<void> => {
-      setStylistsLoading(true);
-      setStylistsError(null);
-      const { data, error } = await loadStylists();
-      if (!active) return;
-      if (error) {
-        setStylistsError(error);
-        setStylists([]);
-      } else {
-        setStylists(data);
-      }
-      setStylistsLoading(false);
-    };
-    void run();
-    return () => {
-      active = false;
-    };
-  }, []);
+  // Remove stylist prefetching; selection is simplified to ANY
   
-  // Allow selecting from the pool: default to "ANY" and let backend assign later
-  const [stylistId, setStylistId] = useState<string>("ANY");
-  useEffect(() => {
-    if (!stylistId && stylists.length > 0) {
-      const firstAvailable = stylists.find((s) => s.available)?.id ?? stylists[0].id;
-      setStylistId(firstAvailable);
-    }
-  }, [stylists, stylistId]);
+  // Stylists list and selection
+  const [stylists, setStylists] = useState<ReadonlyArray<{ id: string; name: string }>>([]);
+  const [stylistsLoading, setStylistsLoading] = useState<boolean>(true);
+  const [stylistId, setStylistId] = useState<string>("LOADING");
+  const [busySlots, setBusySlots] = useState<ReadonlyArray<string>>([]);
+  // Track a recently conflicted slot to force-lock it immediately after errors
+  const [conflictedSlot, setConflictedSlot] = useState<string | null>(null);
+
+
 
   // Local timezone-safe date helpers to avoid UTC off-by-one shifts
   const formatLocalDate = (d: Date): string => {
@@ -131,6 +107,27 @@ export default function BookingForm(props: BookingFormProps): React.JSX.Element 
     const m = Number(hhStr) * 60 + Number(mmStr);
     if (Number.isNaN(m)) return false;
     if (threshold >= 0 && m < threshold) return false;
+
+    // Enforce closing time: service must end by 18:00
+    const endMinutes = 18 * 60;
+    if (m + selectedServiceDuration > endMinutes) return false;
+
+    // If a stylist is selected, filter out busy slots for the entire service duration
+    if (stylistId !== "ANY" && busySlots.length > 0) {
+      const blocks = Math.ceil(selectedServiceDuration / 30);
+      for (let i = 0; i < blocks; i++) {
+        const hh = Math.floor((m + i * 30) / 60).toString().padStart(2, "0");
+        const mm = (((m + i * 30) % 60)).toString().padStart(2, "0");
+        const candidate = `${hh}:${mm}`;
+        if (busySlots.includes(candidate)) {
+          return false;
+        }
+      }
+    }
+    // If the slot was just reported as conflicted, treat as unavailable immediately
+    if (conflictedSlot === slot) {
+      return false;
+    }
     return true;
   };
 
@@ -161,6 +158,49 @@ export default function BookingForm(props: BookingFormProps): React.JSX.Element 
     return parseLocalDate(form.date);
   }, [form.date]);
 
+  const selectedServiceDuration: number = useMemo(() => {
+    const svc = services.find((s) => s.id === form.serviceId);
+    return svc?.durationMinutes ?? 30;
+  }, [services, form.serviceId]);
+
+  // Load active stylists on mount (public read via RLS)
+  useEffect(() => {
+    let active = true;
+    const run = async (): Promise<void> => {
+      setStylistsLoading(true);
+      const { stylists, error } = await loadStylists();
+      if (!active) return;
+      if (!error) {
+        setStylists(stylists);
+        setStylistId("ANY"); // switch from LOADING once fetched
+      }
+      setStylistsLoading(false);
+    };
+    void run();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // Fetch busy slots only on demand (e.g., after a failed booking attempt)
+  const refreshBusySlots = async (): Promise<void> => {
+    if (stylistId === "ANY" || !form.date) {
+      setBusySlots([]);
+      return;
+    }
+    const { busySlots, error } = await loadStylistBusySlots(stylistId, form.date);
+    if (error) {
+      setBusySlots([]);
+      return;
+    }
+    setBusySlots(busySlots);
+  };
+
+  // Clear conflicted slot when date or stylist changes
+  useEffect(() => {
+    setConflictedSlot(null);
+  }, [form.date, stylistId]);
+
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [serverError, setServerError] = useState<string | null>(null);
@@ -188,6 +228,7 @@ export default function BookingForm(props: BookingFormProps): React.JSX.Element 
 
   const onSubmit = async (e: React.FormEvent<HTMLFormElement>): Promise<void> => {
     e.preventDefault();
+    if (isSubmitting) return; // guard against double clicks
     setServerError(null);
     if (!isAuthenticated) {
       setServerError("Sign in is required to book appointments.");
@@ -199,6 +240,31 @@ export default function BookingForm(props: BookingFormProps): React.JSX.Element 
     }
     setIsSubmitting(true);
     try {
+      // Server-side availability check happens only on submit
+      const durationMinutes = selectedServiceDuration;
+      if (stylistId !== "ANY") {
+        const { available, error } = await isStylistRangeAvailable({
+          stylistId,
+          dayISO: form.date,
+          startTime: form.time,
+          durationMinutes,
+        });
+        if (error) {
+          await refreshBusySlots();
+          setConflictedSlot(form.time);
+          setServerError("Unable to confirm availability. Busy times are now locked — please select another time under the same stylist.");
+          setIsSubmitting(false);
+          return;
+        }
+        if (!available) {
+          await refreshBusySlots();
+          setConflictedSlot(form.time);
+          setServerError("This time has just been booked. Please select another available time under the same stylist on this date.");
+          setIsSubmitting(false);
+          return;
+        }
+      }
+
       const selectedStylistId: string | undefined = stylistId === "ANY" ? undefined : stylistId;
       const result = await createAppointment({
         serviceId: form.serviceId,
@@ -208,10 +274,16 @@ export default function BookingForm(props: BookingFormProps): React.JSX.Element 
         notes: form.notes,
       });
       if (!result.ok) {
-        setServerError(result.error ?? "Unable to create appointment.");
+        const raw = result.error ?? "Unable to create appointment.";
+        if (/appointment_slots_unique_stylist_date_time|duplicate key value/i.test(raw)) {
+          await refreshBusySlots();
+          setConflictedSlot(form.time);
+          setServerError("This time has just been booked. Please select another available time under the same stylist on this date.");
+        } else {
+          setServerError(raw);
+        }
         return;
       }
-      // Navigate to appointments list after successful booking (stubbed for now)
       router.push("/appointments");
     } catch (err) {
       const msg: string = err instanceof Error ? err.message : "Unknown error";
@@ -297,24 +369,24 @@ export default function BookingForm(props: BookingFormProps): React.JSX.Element 
             name="stylist"
             className="mt-1 w-full rounded-md border border-gray-700 bg-transparent p-2 text-sm text-black focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FA5252] focus-visible:ring-offset-2 focus-visible:ring-offset-white"
             value={stylistId}
-            onChange={(e) => setStylistId(e.target.value)}
-            aria-label="Select a stylist"
+            onChange={(e) => { setStylistId(e.target.value); setConflictedSlot(null); }}
             disabled={stylistsLoading}
+            aria-label="Select a stylist"
           >
-            <option value="ANY">Any available stylist</option>
-            {stylists.filter((s) => s.available).map((s) => (
-              <option key={s.id} value={s.id}>{s.name}</option>
-            ))}
+            {stylistsLoading ? (
+              <option value="LOADING">Loading stylist list…</option>
+            ) : (
+              <>
+                <option value="ANY">Any available stylist</option>
+                {stylists.map((s) => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </>
+            )}
           </select>
-          {stylistsLoading && (
-            <p className="mt-1 text-xs text-muted-foreground">Loading stylists…</p>
-          )}
-          {!stylistsLoading && stylistsError && (
-            <p className="mt-1 text-xs text-red-600">{stylistsError}</p>
-          )}
-          {!stylistsLoading && !stylistsError && (
-            <p className="mt-1 text-xs text-muted-foreground">Choose a stylist or select “Any available stylist” to be matched automatically.</p>
-          )}
+          <p className="mt-1 text-xs text-muted-foreground">
+            {stylistsLoading ? "Fetching stylists…" : "Availability filtering is shown per stylist. Select a stylist to filter out busy slots."}
+          </p>
         </div>
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -343,25 +415,30 @@ export default function BookingForm(props: BookingFormProps): React.JSX.Element 
               {!selectedDate && (
                 <p className="mb-2 text-xs text-muted-foreground">Please select a date first.</p>
               )}
+              {stylistId === "ANY" && selectedDate && (
+                <p className="mb-2 text-xs text-muted-foreground">Availability filtering is shown per stylist. Select a stylist and click Book to confirm; busy slots will be locked if the time is taken.</p>
+              )}
+              {/* Availability loading/error indicators removed to avoid background fetches */}
               <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
                 {timeSlots.map((slot) => {
                   const available = selectedDate ? isSlotAvailable(slot) : false;
                   const isSelected = form.time === slot;
+                  const isLocked = !available || conflictedSlot === slot;
                   const baseClasses = "w-full rounded-md border p-2 text-center text-sm text-black transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FA5252] focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:opacity-100";
-                                  const selectedClasses = isSelected ? "bg-red-600 text-white" : "";
-                  const availableClasses = !isSelected && available ? "bg-gray-200 text-black font-semibold border border-gray-300" : "";
-                  const unavailableClasses = !available ? "bg-gray-200 text-black cursor-not-allowed border border-dashed border-gray-400" : "";
+                  const selectedClasses = isSelected && !isLocked ? "bg-red-600 text-white" : "";
+                  const availableClasses = !isSelected && !isLocked ? "bg-gray-200 text-black font-semibold border border-gray-300" : "";
+                  const unavailableClasses = isLocked ? "bg-gray-200 text-black cursor-not-allowed border border-dashed border-gray-400" : "";
                   return (
                     <button
                       key={slot}
                       type="button"
                       aria-pressed={isSelected}
-                      aria-label={`Time ${slot}${available ? "" : " (unavailable)"}`}
-                      disabled={!available || !selectedDate}
+                      aria-label={`Time ${slot}${isLocked ? " (unavailable)" : ""}`}
+                      disabled={isLocked || !selectedDate}
                       className={`${baseClasses} ${selectedClasses} ${availableClasses} ${unavailableClasses}`}
-                      onClick={() => available && selectedDate ? onChange({ time: slot }) : undefined}
+                      onClick={() => !isLocked && selectedDate ? onChange({ time: slot }) : undefined}
                     >
-                      {!available ? (
+                      {isLocked ? (
                         <span className="inline-flex items-center justify-center gap-1">
                           <span aria-hidden="true">🔒</span>
                           <span>{slot}</span>

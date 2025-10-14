@@ -1,4 +1,4 @@
-// Stylists service: load remote stylists from Supabase (profiles fallback only)
+// Stylists service: load remote stylists from Supabase (dedicated stylists table)
 import { getSupabaseClient, isSupabaseEnvReady } from "@/lib/supabase-client";
 
 export type Stylist = {
@@ -9,13 +9,14 @@ export type Stylist = {
   avatarUrl?: string;
 };
 
-// Using profiles table as the source of truth for now
-// Expected preferences JSON shape: { role: "stylist", specialties: string[], available: boolean }
-type ProfilesTableRow = {
-  user_id: string;
-  full_name: string | null;
-  preferences: Record<string, unknown> | null;
-  avatar_url?: string | null;
+// Dedicated stylists table is the source of truth
+// public.stylists columns: profile_id (uuid, PK), display_name (text), bio (text), specialties (text[]), is_active (boolean)
+type StylistsTableRow = {
+  profile_id: string; // uuid as string in client
+  display_name: string;
+  bio: string | null;
+  specialties: string[] | null;
+  is_active: boolean;
 };
 
 export type LoadStylistsResult = { data: Stylist[]; error: string | null };
@@ -26,45 +27,41 @@ export async function loadStylists(): Promise<LoadStylistsResult> {
   if (!client) return { data: [], error: "Supabase client not initialized." };
 
   try {
-    const { data: profileData, error: profilesError } = await client
-      .from("profiles")
-      .select("user_id,full_name,preferences,avatar_url")
-      .order("full_name", { ascending: true });
-
-    if (profilesError) {
-      return { data: [], error: profilesError.message };
+    // Exclude current user if they happen to be in the stylists table
+    let currentUserId: string | null = null;
+    try {
+      const { data: userData } = await client.auth.getUser();
+      currentUserId = userData?.user?.id ?? null;
+    } catch {
+      currentUserId = null;
     }
 
-    const rows: ProfilesTableRow[] = (profileData ?? []) as unknown as ProfilesTableRow[];
+    let query = client
+      .from("stylists")
+      .select("profile_id,display_name,bio,specialties,is_active")
+      .order("display_name", { ascending: true });
 
-    const mapped: Stylist[] = rows
-      .map((row) => {
-        const prefs = row.preferences ?? {};
-        const roleVal = prefs["role"];
-        const role = typeof roleVal === "string" ? roleVal : "";
-        const specialtiesVal = prefs["specialties"];
-        const specialties = Array.isArray(specialtiesVal) ? (specialtiesVal as string[]) : [];
-        const availableVal = prefs["available"];
-        const available = typeof availableVal === "boolean" ? availableVal : false;
+    if (currentUserId) {
+      query = query.neq("profile_id", currentUserId);
+    }
 
-        return {
-          id: String(row.user_id),
-          name: row.full_name ?? "Unknown",
-          specialties,
-          available,
-          avatarUrl: row.avatar_url ?? undefined,
-        } satisfies Stylist;
-      })
-      // Keep only stylist role entries; availability is filtered in UI
-      .filter((s, idx) => {
-        const isStylistRole = (() => {
-          // We don’t have role after mapping; re-derive from original row
-          const prefs = rows[idx]?.preferences ?? {};
-          const rv = prefs["role"];
-          return typeof rv === "string" && rv.toLowerCase() === "stylist";
-        })();
-        return isStylistRole;
-      });
+    const { data, error } = await query;
+    if (error) {
+      return { data: [], error: error.message };
+    }
+
+    const rows: StylistsTableRow[] = (data ?? []) as unknown as StylistsTableRow[];
+
+    const mapped: Stylist[] = rows.map((row) => {
+      const specialties = Array.isArray(row.specialties) ? row.specialties : [];
+      return {
+        id: String(row.profile_id),
+        name: row.display_name,
+        specialties,
+        available: Boolean(row.is_active),
+        avatarUrl: undefined, // Can be populated later via a join to profiles.avatar_url if needed
+      } satisfies Stylist;
+    });
 
     return { data: mapped, error: null };
   } catch (err) {

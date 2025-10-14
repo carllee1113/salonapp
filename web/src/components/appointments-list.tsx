@@ -2,8 +2,7 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { loadUserAppointments, type Appointment } from "@/services/appointments";
-import { loadStylists, type Stylist } from "@/services/stylists";
+import { loadUserAppointmentsFast, type Appointment } from "@/services/appointments";
 
 type LoadState = "idle" | "loading" | "loaded";
 
@@ -11,9 +10,7 @@ export default function AppointmentsList(): React.JSX.Element {
   const [state, setState] = useState<LoadState>("idle");
   const [error, setError] = useState<string | null>(null);
   const [items, setItems] = useState<Appointment[]>([]);
-  const [stylists, setStylists] = useState<Stylist[]>([]);
-  const [stylistsError, setStylistsError] = useState<string | null>(null);
-  const [stylistsLoading, setStylistsLoading] = useState<boolean>(false);
+  // Joined fetch includes stylist display names; no separate stylists request needed
 
   useEffect(() => {
     let active = true;
@@ -21,7 +18,7 @@ export default function AppointmentsList(): React.JSX.Element {
       setState("loading");
       setError(null);
       try {
-        const { data, error } = await loadUserAppointments();
+        const { data, error } = await loadUserAppointmentsFast();
         if (!active) return;
         if (error) {
           setError(error);
@@ -44,46 +41,14 @@ export default function AppointmentsList(): React.JSX.Element {
     };
   }, []);
 
-  useEffect(() => {
-    let active = true;
-    const run = async (): Promise<void> => {
-      setStylistsLoading(true);
-      setStylistsError(null);
-      try {
-        const { data, error } = await loadStylists();
-        if (!active) return;
-        if (error) {
-          setStylistsError(error);
-          setStylists([]);
-        } else {
-          setStylists(data);
-        }
-      } catch (err) {
-        const msg: string = err instanceof Error ? err.message : "Unknown error";
-        setStylistsError(msg);
-        setStylists([]);
-      } finally {
-        if (active) setStylistsLoading(false);
-      }
-    };
-    void run();
-    return () => {
-      active = false;
-    };
-  }, []);
+  // Removed secondary stylists fetch; stylist names are returned with appointments
 
   const hasAuthOrEnvIssue: boolean = useMemo(() => {
     if (!error) return false;
     return /not authenticated|supabase environment not configured/i.test(error);
   }, [error]);
 
-  const stylistNameById: Record<string, string> = useMemo(() => {
-    const map: Record<string, string> = {};
-    stylists.forEach((s) => {
-      map[s.id] = s.name;
-    });
-    return map;
-  }, [stylists]);
+  // Names are available directly on items via stylistName
 
   const formatDate = (yyyyMmDd: string): string => {
     const [y, m, d] = yyyyMmDd.split("-").map((p) => Number(p));
@@ -141,7 +106,7 @@ export default function AppointmentsList(): React.JSX.Element {
                   </p>
                   <p className="text-xs text-muted-foreground">Service: {apt.serviceId}</p>
                   {apt.stylistId && (
-                    <p className="text-xs text-muted-foreground">Stylist: {stylistNameById[apt.stylistId] ?? "Unknown"}</p>
+                    <p className="text-xs text-muted-foreground">Stylist: {apt.stylistName ?? "Unknown"}</p>
                   )}
                   {apt.notes && (
                     <p className="mt-1 text-xs text-muted-foreground">Notes: {apt.notes}</p>
