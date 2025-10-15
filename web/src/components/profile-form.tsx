@@ -46,6 +46,7 @@ export default function ProfileForm({ initialProfile, onSubmit }: ProfileFormPro
   const [serverError, setServerError] = React.useState<string | null>(null);
   const [serverMessage, setServerMessage] = React.useState<string | null>(null);
   const [isAuthenticated, setIsAuthenticated] = React.useState<boolean | null>(isSupabaseEnvReady ? null : false);
+  const [editing, setEditing] = React.useState<boolean>(false);
 
   // Load profile on mount if initialProfile not provided
   React.useEffect(() => {
@@ -142,32 +143,44 @@ export default function ProfileForm({ initialProfile, onSubmit }: ProfileFormPro
     <form onSubmit={handleSubmit} className="mt-6 grid grid-cols-1 gap-6 sm:grid-cols-2">
       <div className="sm:col-span-2">
         <label htmlFor="fullName" className="block text-sm font-medium text-foreground">Full name</label>
-        <input
-          id="fullName"
-          name="fullName"
-          type="text"
-          value={form.fullName}
-          onChange={(e) => handleChange("fullName", e.target.value)}
-          className="mt-2 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-red-600 text-gray-900 placeholder:text-gray-500 placeholder:opacity-100"
-          placeholder="e.g. Alex Johnson"
-        />
-        {errors.fullName && (
+        {editing ? (
+          <input
+            id="fullName"
+            name="fullName"
+            type="text"
+            value={form.fullName}
+            onChange={(e) => handleChange("fullName", e.target.value)}
+            className="mt-2 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-red-600 text-gray-900 placeholder:text-gray-500 placeholder:opacity-100"
+            placeholder="e.g. Alex Johnson"
+          />
+        ) : (
+          <div className="mt-2 w-full rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-foreground">
+            {form.fullName || "—"}
+          </div>
+        )}
+        {editing && errors.fullName && (
           <p role="alert" className="mt-1 text-sm text-red-600">{errors.fullName}</p>
         )}
       </div>
 
       <div>
         <label htmlFor="phone" className="block text-sm font-medium text-foreground">Phone</label>
-        <input
-          id="phone"
-          name="phone"
-          type="tel"
-          value={form.phone}
-          onChange={(e) => handleChange("phone", e.target.value)}
-          className="mt-2 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-red-600 text-gray-900 placeholder:text-gray-500 placeholder:opacity-100"
-          placeholder="e.g. 1234 5678"
-        />
-        {errors.phone && (
+        {editing ? (
+          <input
+            id="phone"
+            name="phone"
+            type="tel"
+            value={form.phone}
+            onChange={(e) => handleChange("phone", e.target.value)}
+            className="mt-2 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-red-600 text-gray-900 placeholder:text-gray-500 placeholder:opacity-100"
+            placeholder="e.g. 1234 5678"
+          />
+        ) : (
+          <div className="mt-2 w-full rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-foreground">
+            {form.phone || "—"}
+          </div>
+        )}
+        {editing && errors.phone && (
           <p role="alert" className="mt-1 text-sm text-red-600">{errors.phone}</p>
         )}
       </div>
@@ -215,13 +228,23 @@ export default function ProfileForm({ initialProfile, onSubmit }: ProfileFormPro
           <p className="text-sm text-[#1A1A1A]">{serverMessage}</p>
         )}
         <div className="flex items-center justify-end gap-3">
-          <button
-            type="submit"
-            className="rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-600 disabled:cursor-not-allowed disabled:opacity-60"
-            disabled={!isValid || submitting || isAuthenticated === false}
-          >
-            Save changes
-          </button>
+          {editing ? (
+            <button
+              type="submit"
+              className="rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-600 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={!isValid || submitting || isAuthenticated === false}
+            >
+              Save changes
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-600"
+              onClick={() => setEditing(true)}
+            >
+              I want to update
+            </button>
+          )}
           {isAuthenticated === false && (
             <button
               type="button"
