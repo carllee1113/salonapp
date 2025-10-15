@@ -3,7 +3,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { getSupabaseClient, isSupabaseEnvReady } from "@/lib/supabase-client";
-import { createAppointment, isStylistRangeAvailable, loadStylists, loadStylistBusySlots } from "@/services/appointments";
+import { createAppointment, isStylistRangeAvailable, loadStylists, loadStylistBusySlots, cancelAppointment } from "@/services/appointments";
 import { Calendar } from "@/components/ui/calendar";
 
 export type AppointmentData = {
@@ -16,6 +16,9 @@ export type AppointmentData = {
 export type BookingFormProps = {
   initialServiceId?: string;
   initialDate?: string; // YYYY-MM-DD
+  initialStylistId?: string; // stylist UUID or "ANY"
+  initialLockedTime?: string; // HH:MM to show as locked (original time)
+  originalAppointmentId?: string; // for reschedule: cancel after successful booking
 };
 
 export default function BookingForm(props: BookingFormProps): React.JSX.Element {
@@ -53,10 +56,10 @@ export default function BookingForm(props: BookingFormProps): React.JSX.Element 
   // Stylists list and selection
   const [stylists, setStylists] = useState<ReadonlyArray<{ id: string; name: string }>>([]);
   const [stylistsLoading, setStylistsLoading] = useState<boolean>(true);
-  const [stylistId, setStylistId] = useState<string>("LOADING");
+  const [stylistId, setStylistId] = useState<string>(() => (props.initialStylistId ? props.initialStylistId : "LOADING"));
   const [busySlots, setBusySlots] = useState<ReadonlyArray<string>>([]);
   // Track a recently conflicted slot to force-lock it immediately after errors
-  const [conflictedSlot, setConflictedSlot] = useState<string | null>(null);
+  const [conflictedSlot, setConflictedSlot] = useState<string | null>(props.initialLockedTime ?? null);
 
 
 
@@ -172,7 +175,15 @@ export default function BookingForm(props: BookingFormProps): React.JSX.Element 
       if (!active) return;
       if (!error) {
         setStylists(stylists);
-        setStylistId("ANY"); // switch from LOADING once fetched
+        // Preserve initial stylist if provided and valid; otherwise default to ANY
+        setStylistId((prev) => {
+          if (prev !== "LOADING") return prev;
+          const initial = props.initialStylistId;
+          if (initial && (initial === "ANY" || stylists.some((s) => s.id === initial))) {
+            return initial;
+          }
+          return "ANY";
+        });
       }
       setStylistsLoading(false);
     };
@@ -200,6 +211,15 @@ export default function BookingForm(props: BookingFormProps): React.JSX.Element 
   useEffect(() => {
     setConflictedSlot(null);
   }, [form.date, stylistId]);
+
+  // Prefetch busy slots for reschedule context to show locks immediately
+  useEffect(() => {
+    if (!props.originalAppointmentId) return;
+    if (stylistId !== "ANY" && form.date) {
+      void refreshBusySlots();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.originalAppointmentId, stylistId, form.date]);
 
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
@@ -283,6 +303,18 @@ export default function BookingForm(props: BookingFormProps): React.JSX.Element 
           setServerError(raw);
         }
         return;
+      }
+      // If rescheduling, cancel the original after successful booking
+      if (props.originalAppointmentId) {
+        try {
+          const cancelRes = await cancelAppointment(props.originalAppointmentId);
+          if (!cancelRes.ok) {
+            // Non-blocking: surface error but proceed to show updated appointments
+            setServerError(cancelRes.error ?? "Booked new appointment, but failed to cancel the original.");
+          }
+        } catch {
+          // Ignore cancellation error and proceed
+        }
       }
       router.push("/appointments");
     } catch (err) {

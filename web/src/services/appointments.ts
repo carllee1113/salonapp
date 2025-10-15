@@ -185,6 +185,34 @@ export function getServiceDurationMinutes(serviceId: string): number {
   }
 }
 
+export type AppointmentCancelResult = { ok: boolean; error: string | null };
+
+// Cancel an appointment owned by the current user
+export async function cancelAppointment(id: string): Promise<AppointmentCancelResult> {
+  if (!isSupabaseEnvReady) return { ok: false, error: "Supabase environment not configured." };
+  const client = getSupabaseClient();
+  if (!client) return { ok: false, error: "Supabase client not initialized." };
+  try {
+    const { data: authData, error: authError } = await client.auth.getUser();
+    if (authError) return { ok: false, error: authError.message };
+    const userId = authData?.user?.id;
+    if (!userId) return { ok: false, error: "Not authenticated." };
+
+    // RLS ensures only owner can delete; explicit user_id filter as an extra safeguard
+    const { error } = await client
+      .from("appointments")
+      .delete()
+      .eq("id", id)
+      .eq("user_id", userId);
+
+    if (error) return { ok: false, error: error.message };
+    return { ok: true, error: null };
+  } catch (err) {
+    const msg: string = err instanceof Error ? err.message : "Unknown error";
+    return { ok: false, error: msg };
+  }
+}
+
 export async function loadStylistBusySlots(stylistId: string, dayISO: string): Promise<StylistBusySlotsResult> {
   if (!isSupabaseEnvReady) return { busySlots: [], error: "Supabase environment not configured." };
   const client = getSupabaseClient();

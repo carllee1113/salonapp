@@ -2,6 +2,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { getSupabaseClient, isSupabaseEnvReady } from "@/lib/supabase-client";
 import type { SupabaseClient, AuthChangeEvent, Session } from "@supabase/supabase-js";
+import Link from "next/link";
+import { loadCurrentUserProfile } from "@/services/profile";
 
 type AuthMode = "login" | "signup";
 
@@ -25,6 +27,7 @@ function validateCredentials(email: string, password: string): { ok: boolean; er
 const AuthPanel: React.FC = () => {
   const [form, setForm] = useState<FormState>({ email: "", password: "", mode: "login", loading: false, message: null, error: null });
   const [session, setSession] = useState<Session | null>(null);
+  const [userName, setUserName] = useState<string | null>(null);
 
   const client: SupabaseClient | null = useMemo(() => (isSupabaseEnvReady ? getSupabaseClient() : null), []);
 
@@ -52,6 +55,31 @@ const AuthPanel: React.FC = () => {
       sub.subscription.unsubscribe();
     };
   }, [client]);
+
+  useEffect(() => {
+    let active = true;
+    const run = async () => {
+      // Only attempt to load profile when session is present
+      if (!client || !session) {
+        setUserName(null);
+        return;
+      }
+      try {
+        const res = await loadCurrentUserProfile();
+        if (!active) return;
+        const name = res.data?.fullName?.trim();
+        setUserName(name ? name : null);
+      } catch {
+        // Silent error: greeting is optional UI enhancement
+        if (!active) return;
+        setUserName(null);
+      }
+    };
+    void run();
+    return () => {
+      active = false;
+    };
+  }, [client, session]);
 
   const onSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -143,6 +171,16 @@ const AuthPanel: React.FC = () => {
         {session ? (
           <div className="mt-3 space-y-3">
             <div className="text-sm text-muted-foreground">Signed in as: <span className="font-medium">{session.user?.email ?? "(no email)"}</span></div>
+            <div className="text-sm">
+              {userName ? (
+                <span className="font-medium">Welcome back, {userName}!</span>
+              ) : (
+                <span className="font-medium">Welcome back!</span>
+              )}
+            </div>
+            <Link href="/services" className="block w-full rounded-md px-3 py-2 text-sm bg-red-600 text-white text-center hover:bg-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FA5252] focus-visible:ring-offset-2 focus-visible:ring-offset-white">
+              Make Appointment
+            </Link>
             <button type="button" onClick={onLogout} className="w-full rounded-md px-3 py-2 text-sm bg-red-600 text-white disabled:opacity-60" disabled={form.loading}>
               {form.loading ? "Logging out…" : "Logout"}
             </button>

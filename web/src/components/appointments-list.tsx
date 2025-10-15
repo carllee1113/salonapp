@@ -2,7 +2,7 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { loadUserAppointmentsFast, type Appointment } from "@/services/appointments";
+import { loadUserAppointmentsFast, cancelAppointment, type Appointment } from "@/services/appointments";
 
 type LoadState = "idle" | "loading" | "loaded";
 
@@ -10,6 +10,8 @@ export default function AppointmentsList(): React.JSX.Element {
   const [state, setState] = useState<LoadState>("idle");
   const [error, setError] = useState<string | null>(null);
   const [items, setItems] = useState<Appointment[]>([]);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [actingId, setActingId] = useState<string | null>(null);
   // Joined fetch includes stylist display names; no separate stylists request needed
 
   useEffect(() => {
@@ -57,10 +59,36 @@ export default function AppointmentsList(): React.JSX.Element {
     return dt.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
   };
 
+  const handleCancel = async (id: string): Promise<void> => {
+    if (actingId) return; // prevent concurrent actions
+    setActionError(null);
+    const ok = typeof window !== "undefined" ? window.confirm("Cancel this appointment?") : true;
+    if (!ok) return;
+    setActingId(id);
+    try {
+      const result = await cancelAppointment(id);
+      if (!result.ok) {
+        setActionError(result.error ?? "Unable to cancel appointment.");
+        return;
+      }
+      // Optimistic removal from list
+      setItems((prev) => prev.filter((a) => a.id !== id));
+    } catch (err) {
+      const msg: string = err instanceof Error ? err.message : "Unknown error";
+      setActionError(msg);
+    } finally {
+      setActingId(null);
+    }
+  };
+
   return (
     <div className="mt-6">
       {state === "loading" && (
         <p className="text-sm text-muted-foreground">Loading your appointments…</p>
+      )}
+
+      {actionError && (
+        <p className="mb-2 text-sm text-red-600" role="alert">{actionError}</p>
       )}
 
       {state === "loaded" && hasAuthOrEnvIssue && (
@@ -114,17 +142,20 @@ export default function AppointmentsList(): React.JSX.Element {
                 </div>
                 <div className="flex items-center gap-2">
                   <Link
-                    href="/appointments/new"
+                    href={`/appointments/new?service=${encodeURIComponent(apt.serviceId)}&date=${encodeURIComponent(apt.date)}${apt.stylistId ? `&stylist=${encodeURIComponent(apt.stylistId)}` : ""}&lock=${encodeURIComponent(apt.time)}&orig=${encodeURIComponent(apt.id)}`}
                     className="rounded-md bg-gray-200 px-3 py-2 text-xs text-black hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FA5252] focus-visible:ring-offset-2 focus-visible:ring-offset-white"
                   >
                     Reschedule
                   </Link>
                   <button
                     type="button"
-                    className="rounded-md bg-red-600 px-3 py-2 text-xs text-white hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FA5252] focus-visible:ring-offset-2 focus-visible:ring-offset-white"
-                    disabled
+                    className="rounded-md bg-red-600 px-3 py-2 text-xs text-white hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FA5252] focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:opacity-60"
+                    onClick={() => handleCancel(apt.id)}
+                    disabled={Boolean(actingId)}
+                    aria-busy={actingId === apt.id}
+                    aria-label="Cancel appointment"
                   >
-                    Cancel (coming soon)
+                    {actingId === apt.id ? "Cancelling…" : "Cancel"}
                   </button>
                 </div>
               </div>

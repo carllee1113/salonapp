@@ -82,7 +82,6 @@ export default function DashboardShell({ children }: DashboardShellProps) {
     { href: "/services", label: "Services" },
     // Calendar removed per request
     { href: "/appointments", label: "Appointments" },
-    { href: "/profile", label: "Profile" },
   ];
 
   const isActive = (href: string): boolean => {

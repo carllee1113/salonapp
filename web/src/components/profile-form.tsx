@@ -1,7 +1,7 @@
 'use client';
 import React from "react";
 import { useRouter } from "next/navigation";
-import { isSupabaseEnvReady } from "@/lib/supabase-client";
+import { getSupabaseClient, isSupabaseEnvReady } from "@/lib/supabase-client";
 
 // Types
 export type ProfilePreferences = {
@@ -139,6 +139,20 @@ export default function ProfileForm({ initialProfile, onSubmit }: ProfileFormPro
     }
   };
 
+  const onLogout = async () => {
+    try {
+      if (!isSupabaseEnvReady) {
+        router.push("/");
+        return;
+      }
+      const client = getSupabaseClient();
+      await client?.auth.signOut();
+      router.push("/");
+    } catch {
+      // Silent: logout is best-effort; header will reflect auth state
+    }
+  };
+
   return (
     <form onSubmit={handleSubmit} className="mt-6 grid grid-cols-1 gap-6 sm:grid-cols-2">
       <div className="sm:col-span-2">
@@ -237,13 +251,24 @@ export default function ProfileForm({ initialProfile, onSubmit }: ProfileFormPro
               Save changes
             </button>
           ) : (
-            <button
-              type="button"
-              className="rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-600"
-              onClick={() => setEditing(true)}
-            >
-              I want to update
-            </button>
+            <>
+              <button
+                type="button"
+                className="rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-600"
+                onClick={() => setEditing(true)}
+              >
+                I want to update
+              </button>
+              {isAuthenticated === true && (
+                <button
+                  type="button"
+                  className="rounded-md bg-gray-200 px-4 py-2 text-sm font-medium text-foreground hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-300"
+                  onClick={onLogout}
+                >
+                  Logout
+                </button>
+              )}
+            </>
           )}
           {isAuthenticated === false && (
             <button
